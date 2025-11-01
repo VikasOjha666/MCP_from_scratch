@@ -74,7 +74,8 @@ def get_prompt(user_query: str, functions: list = []) -> str:
         "Example:\n"
         ">>>CALL_FUNCTION<<<\n"
         "{\"name\": \"get_current_weather\", \"arguments\": {\"location\": \"Boston, MA\", \"unit\": \"celsius\"}}\n"
-        "If you do not need to call a function, just answer normally.\n"
+        "If you do not need to call a function, just answer normally.\n",
+        "Also don't give example how to call the function but give the exact marker defined above."
     )
     functions_string = json.dumps(functions, indent=2)
     return f"{system}\nAvailable Functions:\n{functions_string}\nUser: {user_query}\nAssistant:"
