@@ -9,7 +9,7 @@ from utils import strip_internal_fields, sanitize_for_json, get_prompt, extract_
 from mcp_tools_ret_utils import index_tools_to_lancedb, fetch_top_k_tools_formatted
 import re
 
-MCP_SERVER_URLS = ["http://localhost:8000/sse"]
+MCP_SERVER_URLS = ["http://localhost:8001/sse"]
 MODEL_PATH = "gorilla-openfunctions-v2-GGUF/gorilla-openfunctions-v2-q4_K_M.gguf"
 CALL_MARKER_KEY = "CALL_FUNCTION"
 
@@ -239,7 +239,7 @@ async def run_query(req: QueryRequest):
 
     # Step 5: execute MCP tool via SSE
     try:
-        tool_result = await call_mcp_sse(func_name, func_args,url="http://localhost:8000/sse")
+        tool_result = await call_mcp_sse(func_name, func_args,url="http://localhost:8001/sse")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error calling MCP tool: {e}")
 
