@@ -5,15 +5,15 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from llama_cpp import Llama
 from llama_index.tools.mcp import BasicMCPClient, McpToolSpec
-from utils import strip_internal_fields, sanitize_for_json, get_prompt, extract_call_from_text, call_mcp_sse
+from utils import strip_internal_fields, sanitize_for_json, get_prompt, extract_call_from_text, call_mcp_sse,get_server_for_tool
 from mcp_tools_ret_utils import index_tools_to_lancedb, fetch_top_k_tools_formatted
 import re
 
-MCP_SERVER_URLS = ["http://localhost:8001/sse"]
+MCP_SERVER_URLS = ["http://localhost:8000/sse","http://localhost:8001/sse"]
 MODEL_PATH = "gorilla-openfunctions-v2-GGUF/gorilla-openfunctions-v2-q4_K_M.gguf"
 CALL_MARKER_KEY = "CALL_FUNCTION"
 
-app = FastAPI(title="MCP + Llama endpoint")
+app = FastAPI(title="MCP")
 
 # Globals populated at startup
 server_map_dict: Dict[str, List[Dict[str, Any]]] = {}
@@ -238,8 +238,9 @@ async def run_query(req: QueryRequest):
         func_name, func_args = call
 
     # Step 5: execute MCP tool via SSE
+    url_to_call=get_server_for_tool(func_name, server_map_dict)
     try:
-        tool_result = await call_mcp_sse(func_name, func_args,url="http://localhost:8001/sse")
+        tool_result = await call_mcp_sse(func_name, func_args,url=url_to_call)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error calling MCP tool: {e}")
 

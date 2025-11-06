@@ -1,5 +1,0 @@
-fastmcp
-duckduckgo_search
-requests
-beautifulsoup4
-sumy

@@ -2,7 +2,7 @@ import asyncio
 import json
 import re
 import ast
-from typing import List, Dict, Any
+from typing import Dict, List, Optional, Union,Any
 from llama_cpp import Llama
 from llama_index.tools.mcp import BasicMCPClient, McpToolSpec
 import aiohttp
@@ -12,6 +12,59 @@ import numpy as np
 import copy
 
 CALL_MARKER_KEY = "CALL_FUNCTION"
+
+
+
+def build_tool_index(server_map: Dict[str, List[Dict]]) -> Dict[str, List[str]]:
+    """
+    Build an index mapping tool name -> list of server URLs that provide that tool.
+    """
+    index: Dict[str, List[str]] = {}
+    for server_url, tools in server_map.items():
+        for tool in tools:
+            name = tool.get("name")
+            if not name:
+                continue
+            index.setdefault(name, []).append(server_url)
+    return index
+
+
+def get_server_for_tool(
+    tool_name: str,
+    server_map: Dict[str, List[Dict]],
+    *,
+    first_only: bool = True,
+    case_sensitive: bool = False
+) -> Optional[Union[str, List[str]]]:
+    """
+    Return the server URL(s) that provide the tool `tool_name`.
+
+    Args:
+      tool_name: name of the tool to look up (e.g. "add").
+      server_map: dict mapping server_url -> list of tool dicts (like your server_map_dict).
+      first_only: if True (default) return the first matching URL (string).
+                  if False return a list of all matching URLs (could be empty).
+      case_sensitive: if False (default) match tool name case-insensitively.
+
+    Returns:
+      If first_only=True -> a string (server URL) or None if not found.
+      If first_only=False -> list of matching URLs (empty list if none found).
+    """
+    # Build index (fast for repeated lookups)
+    index = build_tool_index(server_map)
+
+    if not case_sensitive:
+        # build a case-insensitive mapping
+        ci_index = {}
+        for name, urls in index.items():
+            ci_index[name.lower()] = ci_index.get(name.lower(), []) + urls
+        matches = ci_index.get(tool_name.lower(), [])
+    else:
+        matches = index.get(tool_name, [])
+
+    if first_only:
+        return matches[0] if matches else None
+    return matches
 
 
 def sanitize_for_json(obj: Any) -> Any:
