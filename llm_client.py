@@ -8,8 +8,12 @@ from llama_index.tools.mcp import BasicMCPClient, McpToolSpec
 from utils import strip_internal_fields, sanitize_for_json, get_prompt, extract_call_from_text, call_mcp_sse,get_server_for_tool
 from mcp_tools_ret_utils import index_tools_to_lancedb, fetch_top_k_tools_formatted
 import re
+import os
+MCP_SERVER_URLS = os.environ.get('MCP_SERVER_URLS', '')
+if MCP_SERVER_URLS:
+    MCP_SERVER_URLS = MCP_SERVER_URLS.split(',')
 
-MCP_SERVER_URLS = ["http://localhost:8000/sse","http://localhost:8001/sse"]
+
 MODEL_PATH = "gorilla-openfunctions-v2-GGUF/gorilla-openfunctions-v2-q4_K_M.gguf"
 CALL_MARKER_KEY = "CALL_FUNCTION"
 
