@@ -26,7 +26,6 @@ llm: Optional[Llama] = None
 class QueryRequest(BaseModel):
     query: str
     k: int = 4
-    include_server_url: bool = True
 
 
 
@@ -151,7 +150,7 @@ async def run_query(req: QueryRequest):
     """
     try:
         # Step 1: retrieve candidate tools from lancedb
-        functions = fetch_top_k_tools_formatted(req.query, k=req.k, include_server_url=req.include_server_url)
+        functions = fetch_top_k_tools_formatted(req.query, k=req.k)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching tools from index: {e}")
     print(f"functions returned by discovery={functions}")

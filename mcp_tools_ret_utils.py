@@ -191,8 +191,7 @@ def fetch_top_k_tools_formatted(
     db_path: str = "./mcp_tools_lancedb",
     table_name: str = "mcp_tools",
     k: int = 5,
-    embedding_model_name: str = EMBED_MODEL_NAME,
-    include_server_url: bool = False,
+    embedding_model_name: str = EMBED_MODEL_NAME
 ) -> List[Dict[str, Any]]:
     """
     Query LanceDB and return top-k tools in the requested schema.
@@ -220,8 +219,8 @@ def fetch_top_k_tools_formatted(
             for _, row in df.iterrows():
                 params = _ensure_json_schema(row.get("parameters", None))
                 entry = {"name": row.get("tool_name"), "description": row.get("description") or "", "parameters": params}
-                if include_server_url:
-                    entry["server_url"] = row.get("server_url")
+                
+                entry["server_url"] = row.get("server_url")
                 hits.append(entry)
             return hits
         else:
@@ -234,8 +233,8 @@ def fetch_top_k_tools_formatted(
             for hit in executed[:k]:
                 params = _ensure_json_schema(hit.get("parameters", None))
                 entry = {"name": hit.get("tool_name"), "description": hit.get("description") or "", "parameters": params}
-                if include_server_url:
-                    entry["server_url"] = hit.get("server_url")
+                
+                entry["server_url"] = hit.get("server_url")
                 hits.append(entry)
             return hits
     except Exception as e:
