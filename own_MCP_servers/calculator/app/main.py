@@ -38,5 +38,5 @@ def divide(a: float, b: float) -> float:
 
 if __name__ == "__main__":
     logger.info("Starting MCP server on %s:%d", HOST, PORT)
-    # FastMCP's .run() will start the server. transport "sse" is common for remote clients.
+    # Running with SSE as transport because we will use same in client to interact.
     mcp.run("sse")

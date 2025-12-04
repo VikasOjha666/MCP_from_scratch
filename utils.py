@@ -2,17 +2,12 @@ import asyncio
 import json
 import re
 import ast
-from typing import Dict, List, Optional, Union,Any
-from llama_cpp import Llama
-from llama_index.tools.mcp import BasicMCPClient, McpToolSpec
+from typing import Dict, List, Optional, Union, Any,Tuple
 import aiohttp
 from urllib.parse import urljoin
 from utils import *
 import numpy as np
 import copy
-
-CALL_MARKER_KEY = "CALL_FUNCTION"
-
 
 
 def build_tool_index(server_map: Dict[str, List[Dict]]) -> Dict[str, List[str]]:
@@ -27,6 +22,69 @@ def build_tool_index(server_map: Dict[str, List[Dict]]) -> Dict[str, List[str]]:
                 continue
             index.setdefault(name, []).append(server_url)
     return index
+
+
+def try_parse_function_call(text: str) -> Optional[Tuple[str, dict]]:
+    """
+    Robust function call extractor.
+    Handles noisy model outputs like:
+      <<<CALL_FUNCTION>>>subtract(a=2, b=3)
+      <<function>> add(x=1,y=2)
+      function_call: multiply(a=2)
+    """
+    if not text:
+        return None
+
+    txt = text.strip()
+
+    # Flexible patterns
+    patterns = [
+        
+        r"<+ *CALL_FUNCTION *>+\s*([A-Za-z0-9_]+)\s*\((.*)\)",
+        
+        r"<+ *function *>+\s*([A-Za-z0-9_]+)\s*\((.*)\)",
+        
+        r"CALL_FUNCTION\s*:?\s*([A-Za-z0-9_]+)\s*\((.*)\)",
+        
+        r"([A-Za-z0-9_]+)\s*\((.*)\)"
+    ]
+
+    for p in patterns:
+        m = re.search(p, txt, flags=re.IGNORECASE | re.DOTALL)
+        if not m:
+            continue
+
+        func_name = m.group(1)
+        args_str = m.group(2).strip()
+        args = {}
+
+        # No args
+        if args_str == "":
+            return func_name, args
+
+        # Split arguments by commas NOT inside quotes
+        parts = [s.strip() for s in re.split(r',(?=(?:[^"]*"[^"]*")*[^"]*$)', args_str) if s.strip()]
+
+        for part in parts:
+            if "=" in part:
+                k, v = part.split("=", 1)
+                k = k.strip()
+                v = v.strip()
+
+                try:
+                    parsed_v = ast.literal_eval(v)
+                except Exception:
+                    parsed_v = v.strip('"').strip("'")
+
+                args[k] = parsed_v
+
+            else:
+                # positional args
+                args.setdefault("_args", []).append(part)
+
+        return func_name, args
+
+    return None
 
 
 def get_server_for_tool(
@@ -104,19 +162,6 @@ def sanitize_for_json(obj: Any) -> Any:
 
     # fallback: assume JSON-serializable already
     return obj
-
-
-def strip_internal_fields(functions: list, fields: tuple = ("embedding",)) -> list:
-    """
-    Return a deep-copied list of dicts where any key in `fields` is removed.
-    Useful to avoid sending embeddings / non-serializable metadata to the LLM.
-    """
-    functions_copy = copy.deepcopy(functions)
-    for f in functions_copy:
-        for field in fields:
-            if field in f:
-                del f[field]
-    return functions_copy
 
 
 def get_prompt(user_query: str, functions: list = []) -> str:
@@ -212,117 +257,12 @@ def sanitize_for_json(obj: Any) -> Any:
 
 
 
-def _parse_value_literal(val_str: str):
-    val_str = val_str.strip()
-    # Try JSON first (handles true/false/null, numbers, strings)
-    try:
-        return json.loads(val_str)
-    except Exception:
-        pass
-    # Try Python literal evaluation (safe-ish)
-    try:
-        return ast.literal_eval(val_str)
-    except Exception:
-        # fallback: strip quotes if present, else return raw string
-        if (val_str.startswith('"') and val_str.endswith('"')) or (val_str.startswith("\'") and val_str.endswith("\'")):
-            return val_str[1:-1]
-        return val_str
-
 
 def _split_args_top_level(args_str: str):
     # split on commas that are not inside quotes or parentheses
     parts = re.split(r',(?=(?:[^\"\']*[\"\'][^\"\']*[\"\'])*[^\"\']*$)', args_str)
     # the regex above is a heuristic — trim parts
     return [p.strip() for p in parts if p.strip()]
-
-
-def extract_call_from_text(text: str, functions: list = None):
-    """
-    Detect a function call in several formats and return (name, arguments_dict) or None.
-
-    Supported formats:
-    - JSON after marker: >>>CALL_FUNCTION<<<\n{"name": "foo", "arguments": {"x": 1}}
-    - Inline JSON somewhere after CALL_FUNCTION token
-    - Function-like call after marker or after CALL_FUNCTION token: foo(x=1, y=2)
-
-    If positional arguments are used (e.g. foo(1, 2)) this will attempt to map them to
-    parameter names using the provided `functions` metadata (if available).
-    """
-    idx = text.find(CALL_MARKER_KEY)
-    if idx == -1:
-        return None
-
-    after = text[idx + len(CALL_MARKER_KEY):].strip()
-    # try to find a JSON block first
-    json_block = _find_json_block(after)
-    if json_block:
-        try:
-            parsed = json.loads(json_block)
-            name = parsed.get("name")
-            args = parsed.get("arguments", {}) or {}
-            return name, args
-        except Exception:
-            # continue to try other formats
-            pass
-
-    # If no JSON, try to find a function-call like pattern
-    # It may be directly appended like <<<CALL_FUNCTION>>>foo(a=1)
-    m = re.search(r"([A-Za-z_][A-Za-z0-9_]*)\s*\((.*?)\)", after, flags=re.DOTALL)
-    if not m:
-        # sometimes the model might output without parentheses e.g. CALL_FUNCTION foo a=1
-        # try a simpler fallback: first token is function name and rest are text
-        tokens = after.split()
-        if tokens:
-            fname = tokens[0].strip()
-            return fname, {}
-        return None
-
-    fname = m.group(1)
-    args_str = m.group(2).strip()
-
-    if not args_str:
-        return fname, {}
-
-    parts = _split_args_top_level(args_str)
-    parsed_args = {}
-    positional = []
-
-    for p in parts:
-        if '=' in p:
-            k, v = p.split('=', 1)
-            k = k.strip()
-            v = _parse_value_literal(v)
-            parsed_args[k] = v
-        else:
-            # positional
-            positional.append(_parse_value_literal(p))
-
-    # If we have positional args and functions metadata, try to map them to parameter names
-    if positional and functions:
-        # Build a map name -> param order if possible
-        func_param_names = None
-        for f in functions:
-            if f.get('name') == fname:
-                params = f.get('parameters')
-                # parameters might be JSON schema; try to extract property order
-                if isinstance(params, dict) and 'properties' in params:
-                    func_param_names = list(params['properties'].keys())
-                elif isinstance(params, dict) and 'required' in params:
-                    # required gives order-ish but not guaranteed
-                    func_param_names = params.get('required')
-                break
-        if func_param_names:
-            for i, val in enumerate(positional):
-                if i < len(func_param_names):
-                    parsed_args[func_param_names[i]] = val
-                else:
-                    parsed_args[f"arg{i}"] = val
-        else:
-            # no metadata — store as arg0, arg1...
-            for i, val in enumerate(positional):
-                parsed_args[f"arg{i}"] = val
-
-    return fname, parsed_args
 
 
 async def call_mcp_sse(name: str, arguments: dict, url: str = "http://localhost:8000/sse",

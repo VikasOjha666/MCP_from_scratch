@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from llama_cpp import Llama
 from llama_index.tools.mcp import BasicMCPClient, McpToolSpec
-from utils import strip_internal_fields, sanitize_for_json, get_prompt, extract_call_from_text, call_mcp_sse,get_server_for_tool
+from utils import  sanitize_for_json,get_prompt, call_mcp_sse,get_server_for_tool,try_parse_function_call
 from mcp_tools_ret_utils import index_tools_to_lancedb, fetch_top_k_tools_formatted
 import re
 import os
@@ -15,7 +15,6 @@ if MCP_SERVER_URLS:
 
 
 MODEL_PATH = "gorilla-openfunctions-v2-GGUF/gorilla-openfunctions-v2-q4_K_M.gguf"
-CALL_MARKER_KEY = "CALL_FUNCTION"
 
 app = FastAPI(title="MCP")
 
@@ -26,66 +25,10 @@ llm: Optional[Llama] = None
 
 class QueryRequest(BaseModel):
     query: str
-    k: int = 2
+    k: int = 4
     include_server_url: bool = True
 
-def try_parse_function_call(text: str) -> Optional[Tuple[str, dict]]:
-    """
-    Try to extract a function call from model text. Returns (func_name, args_dict)
-    or None if no plausible call detected.
 
-    Handles patterns like:
-      <<function>>func_name(arg=val)
-      <<function>> func_name(arg=val)
-      CALL_FUNCTION: func_name(arg=val)
-      func_name(arg=val)   (last-resort)
-    """
-    if not text:
-        return None
-    txt = text.strip()
-
-    # Common patterns to try (ordered)
-    patterns = [
-        r"<<function>>\s*([A-Za-z0-9_]+)\s*\((.*)\)",       # <<function>>name(args)
-        r"CALL_FUNCTION\s*:?\s*([A-Za-z0-9_]+)\s*\((.*)\)", # CALL_FUNCTION: name(args)
-        r"<<function>>(?:\s*)([A-Za-z0-9_]+)\s*\((.*)\)",   # extra safe
-        r"^([A-Za-z0-9_]+)\s*\((.*)\)$",                    # name(args) (careful)
-    ]
-
-    for p in patterns:
-        m = re.search(p, txt, flags=re.DOTALL)
-        if not m:
-            continue
-        func_name = m.group(1)
-        args_str = m.group(2).strip()
-        args: dict = {}
-
-        if args_str == "":
-            return func_name, args
-
-        # Split top-level commas (avoid splitting inside quotes)
-        parts = [s.strip() for s in re.split(r',(?=(?:[^"]*"[^"]*")*[^"]*$)', args_str) if s.strip()]
-
-        for part in parts:
-            # handle key=value pairs or bare positional values
-            if "=" in part:
-                k, v = part.split("=", 1)
-                k = k.strip()
-                v = v.strip()
-                # Try to literal_eval the value (numbers, lists, strings)
-                try:
-                    parsed_v = ast.literal_eval(v)
-                except Exception:
-                    # fallback: strip surrounding quotes, else keep raw string
-                    parsed_v = v.strip('"').strip("'")
-                args[k] = parsed_v
-            else:
-                # positional args — store under special key "_args"
-                args.setdefault("_args", []).append(part)
-
-        return func_name, args
-
-    return None
 
 async def discover_tools(server_urls: List[str]) -> Dict[str, List[Dict[str, Any]]]:
     """
@@ -211,10 +154,10 @@ async def run_query(req: QueryRequest):
         functions = fetch_top_k_tools_formatted(req.query, k=req.k, include_server_url=req.include_server_url)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching tools from index: {e}")
-
+    print(f"functions returned by discovery={functions}")
     # Step 2: prepare prompt
-    functions_no_internal = strip_internal_fields(functions, fields=("embedding",))
-    safe_functions = sanitize_for_json(functions_no_internal)
+    #functions_no_internal = strip_internal_fields(functions, fields=("embedding",))
+    safe_functions = sanitize_for_json(functions)
     prompt = get_prompt(req.query, safe_functions)
 
     # Step 3: call LLM
@@ -224,22 +167,20 @@ async def run_query(req: QueryRequest):
         raise HTTPException(status_code=500, detail=f"Error during LLM call: {e}")
 
     # Step 4: detect function call
-    call = extract_call_from_text(raw_text, functions=functions)
+    call = try_parse_function_call(raw_text)
+
     if call is None:
-        # fallback parser for other formats like <<function>>name(arg=val)
-        fallback = try_parse_function_call(raw_text)
-        if fallback is None:
-            # No function call: return model text as final answer
-            return {
-                "final_text": raw_text,
-                "tool_called": None,
-                "tool_result": None,
-                "raw_model_output": raw_text,
-            }
-        else:
-            func_name, func_args = fallback
-    else:
-        func_name, func_args = call
+        # No function call detected — return raw LLM output
+        return {
+            "final_text": raw_text,
+            "tool_called": None,
+            "tool_result": None,
+            "raw_model_output": raw_text,
+            "error": "No valid function call detected in model output"
+        }
+
+    func_name, func_args = call
+
 
     # Step 5: execute MCP tool via SSE
     url_to_call=get_server_for_tool(func_name, server_map_dict)

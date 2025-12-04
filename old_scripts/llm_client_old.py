@@ -39,8 +39,8 @@ async def main():
             "parameters": params
         }
         functions.append(func_dict)
-
-    query = "Convert 32 celcius to fahrenheit."
+    print(f"functions={functions}")
+    query = "Add two numbers 2 and 3."
     prompt = get_prompt(query, functions)
     print(f"Prompt={prompt}")
 
